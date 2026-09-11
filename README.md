@@ -65,14 +65,14 @@ Unsupported `VITE_SUPPORT_MODE` values fail visibly; they never silently pretend
 
 Create a **Pages** project using **Import an existing Git repository**. Connect `ScorpionD/ai-support-rag-demo` and use:
 
-| Setting | Value |
-| --- | --- |
-| Production branch | `main` |
-| Build command | `npm run build` |
-| Build output directory | `dist` |
-| Root directory | Repository root / leave empty |
-| Node version | `22.12.0` or later supported release |
-| Optional public variable | `VITE_SUPPORT_MODE=mock` |
+| Setting                  | Value                                |
+| ------------------------ | ------------------------------------ |
+| Production branch        | `main`                               |
+| Build command            | `npm run build`                      |
+| Build output directory   | `dist`                               |
+| Root directory           | Repository root / leave empty        |
+| Node version             | `22.12.0` or later supported release |
+| Optional public variable | `VITE_SUPPORT_MODE=mock`             |
 
 Save and deploy. Pages provides a public `*.pages.dev` address and builds future pushes to `main`. The `public/_headers` file adds static response headers, including a restrictive Content Security Policy. No custom domain, DNS changes, Workers binding, Function or paid product is required.
 

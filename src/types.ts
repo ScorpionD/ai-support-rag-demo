@@ -25,7 +25,10 @@ export interface SupportRequest {
   question: string
   history: Message[]
 }
-export interface RequestOptions { signal?: AbortSignal; simulateFailure?: boolean }
+export interface RequestOptions {
+  signal?: AbortSignal
+  simulateFailure?: boolean
+}
 export interface HandoffInput {
   name: string
   email: string

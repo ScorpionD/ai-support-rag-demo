@@ -1,7 +1,11 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { knowledgeBase, sampleQuestions } from '../src/data/knowledgeBase.ts'
-import { mockSupportService, qualifyQuestion, validateHandoff } from '../src/services/mockSupport.ts'
+import {
+  mockSupportService,
+  qualifyQuestion,
+  validateHandoff,
+} from '../src/services/mockSupport.ts'
 import type { HandoffInput, Message } from '../src/types.ts'
 
 for (const [index, question] of sampleQuestions.entries()) {
@@ -27,7 +31,10 @@ test('instructions cannot replace a company policy', () => {
 test('personal order action requires human review', () => {
   const answer = qualifyQuestion('Please cancel my order after payment')
   assert.equal(answer.status, 'needs-human')
-  assert.deepEqual(answer.sources.map(s => s.id), ['NL-04'])
+  assert.deepEqual(
+    answer.sources.map((s) => s.id),
+    ['NL-04'],
+  )
   assert.ok(answer.text.includes('this assistant cannot cancel orders'))
 })
 test('an unsupported policy detail is not presented as confirmed', () => {
@@ -54,7 +61,10 @@ test('all cited content comes from the bundled knowledge base', () => {
   for (const article of knowledgeBase) {
     const answer = qualifyQuestion(article.question)
     for (const source of answer.sources) {
-      assert.deepEqual(source, knowledgeBase.find(s => s.id === source.id))
+      assert.deepEqual(
+        source,
+        knowledgeBase.find((s) => s.id === source.id),
+      )
       assert.ok(answer.text.includes(source.content))
     }
   }
@@ -65,16 +75,29 @@ test('empty and oversized questions fail before answering', () => {
 })
 test('simulated outage can be retried successfully', async () => {
   const request = { question: sampleQuestions[0], history: [] }
-  await assert.rejects(mockSupportService.ask(request, { simulateFailure: true }), /temporarily unavailable/)
+  await assert.rejects(
+    mockSupportService.ask(request, { simulateFailure: true }),
+    /temporarily unavailable/,
+  )
   assert.equal((await mockSupportService.ask(request)).status, 'grounded')
 })
 test('aborting an in-flight answer cancels the result', async () => {
   const controller = new AbortController()
-  const pending = mockSupportService.ask({ question: sampleQuestions[0], history: [] }, { signal: controller.signal })
+  const pending = mockSupportService.ask(
+    { question: sampleQuestions[0], history: [] },
+    { signal: controller.signal },
+  )
   controller.abort()
   await assert.rejects(pending, { name: 'AbortError' })
 })
-const valid: HandoffInput = { name: 'Alex Morgan', email: 'alex@example.com', company: 'Example Studio', message: 'Please review a demo request for 30 items.', consent: true, isLead: true }
+const valid: HandoffInput = {
+  name: 'Alex Morgan',
+  email: 'alex@example.com',
+  company: 'Example Studio',
+  message: 'Please review a demo request for 30 items.',
+  consent: true,
+  isLead: true,
+}
 test('lead capture creates a local unsent draft with validation', () => {
   const draft = mockSupportService.createHandoff(valid)
   assert.equal(draft.delivery, 'not-sent')
