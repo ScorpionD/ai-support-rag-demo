@@ -1734,3 +1734,5 @@ nav > a:hover,
   margin: 0.5rem 0;
 }
 .draft-result dd { overflow-wrap: anywhere; }
+.reused-answer { padding: 0.65rem 1.5rem; font-size: 0.78rem; color: #52675e; background: #f3f6ee; }
+.reused-answer button { display: inline-flex; align-items: center; gap: 0.3rem; padding: 0.25rem; color: #24483e; text-decoration: underline; font: inherit; border: 0; background: transparent; cursor: pointer; }

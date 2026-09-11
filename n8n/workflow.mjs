@@ -72,7 +72,7 @@ export function notificationWorkflow({
     http(
       'Record delivery',
       'finish_notification',
-      "={{ JSON.stringify({p_id: $('Claim request').item.json.id, p_claim: $('Claim request').item.json.claim, p_success: Boolean($json.message_id), p_message: $json.message_id ? String($json.message_id) : null}) }}",
+      "={{ JSON.stringify({p_id: $('Claim request').item.json.id, p_claim: $('Claim request').item.json.claim, p_success: Boolean($json.message_id || $json.result?.message_id), p_message: ($json.message_id || $json.result?.message_id) ? String($json.message_id || $json.result?.message_id) : null}) }}",
       [720, 0],
     ),
     {

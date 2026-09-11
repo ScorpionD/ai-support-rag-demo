@@ -57,6 +57,7 @@ export default function App() {
   const [messages, setMessages] = useState<Message[]>([])
   const [articles, setArticles] = useState<Article[]>(isLive ? [] : knowledgeBase)
   const [ready, setReady] = useState(!isLive)
+  const [initializing, setInitializing] = useState(isLive)
   const [handoffBusy, setHandoffBusy] = useState(false)
   const [input, setInput] = useState('')
   const [busy, setBusy] = useState(false)
@@ -69,6 +70,7 @@ export default function App() {
   const [handoffError, setHandoffError] = useState('')
   const [draft, setDraft] = useState<HandoffDraft | null>(null)
   const [newAnswer, setNewAnswer] = useState(false)
+  const [reusedAnswer, setReusedAnswer] = useState<string | null>(null)
   const feed = useRef<HTMLDivElement>(null)
   const inputRef = useRef<HTMLTextAreaElement>(null)
   const controller = useRef<AbortController | null>(null)
@@ -98,6 +100,9 @@ export default function App() {
         .catch(() => {
           if (mounted) setError('Could not restore your chat. Reload the page to reconnect.')
         })
+        .finally(() => {
+          if (mounted) setInitializing(false)
+        })
     return () => {
       mounted = false
     }
@@ -120,6 +125,7 @@ export default function App() {
     setBusy(true)
     setError('')
     setFailedQuestion('')
+    setReusedAnswer(null)
     setInput('')
     autoScroll.current = true
     if (!retry)
@@ -131,6 +137,8 @@ export default function App() {
         { question: text, history: messages },
         { signal: abort.signal, simulateFailure },
       )
+      if (!abort.signal.aborted && answer.messages && answer.messages.length <= messages.length)
+        setReusedAnswer(answer.id)
       if (!abort.signal.aborted)
         setMessages(
           (previous) =>
@@ -164,10 +172,12 @@ export default function App() {
     setFailedQuestion('')
     setNewAnswer(false)
     setFailNext(false)
+    setReusedAnswer(null)
     setDraft(null)
     setHandoff(emptyHandoff)
     if (supportService.initialize) {
       setReady(false)
+      setInitializing(true)
       try {
         const result = await supportService.initialize(true)
         setMessages(result.messages)
@@ -175,6 +185,8 @@ export default function App() {
         setReady(true)
       } catch {
         setError('Could not start a new session. Reload to reconnect.')
+      } finally {
+        setInitializing(false)
       }
     }
     inputRef.current?.focus()
@@ -403,7 +415,11 @@ export default function App() {
                   </div>
                 )}
                 {messages.map((message, index) => (
-                  <article key={message.id} className={`message ${message.role}`}>
+                  <article
+                    key={message.id}
+                    id={message.answer ? `answer-${message.answer.id}` : undefined}
+                    className={`message ${message.role}`}
+                  >
                     <div className="message-label">
                       {message.role === 'user' ? (
                         'YOU'
@@ -445,7 +461,10 @@ export default function App() {
                         <div className="citations">
                           {message.answer.sources.length ? (
                             message.answer.sources.map((article) => (
-                              <button key={article.id} onClick={() => setSource(article)}>
+                              <button
+                                key={article.chunkId || article.id}
+                                onClick={() => setSource(article)}
+                              >
                                 <BookOpen size={14} />
                                 <span>
                                   {article.id} · {article.title}
@@ -463,11 +482,21 @@ export default function App() {
                         >
                           <Headphones size={14} /> Talk to a human <ArrowRight size={13} />
                         </button>
+                        {/\b(quote|purchase|buy|bulk|sales|business order)\b/i.test(
+                          messages[index - 1]?.text || '',
+                        ) && (
+                          <button
+                            className="handoff-link emphasized"
+                            onClick={() => openHandoff(messages[index - 1]?.text, true)}
+                          >
+                            <Users size={14} /> Request a sales follow-up <ArrowRight size={13} />
+                          </button>
+                        )}
                       </div>
                     )}
                   </article>
                 ))}
-                {(busy || !ready) && (
+                {(busy || initializing) && (
                   <div className="thinking" role="status">
                     <span className="thinking-dots">
                       <i />
@@ -497,6 +526,7 @@ export default function App() {
                     <span>{error}</span>
                   </div>
                   <div className="error-actions">
+                    {!ready && <button onClick={() => window.location.reload()}>Reconnect</button>}
                     {failedQuestion && (
                       <button
                         onClick={() => void ask(failedQuestion, true)}
@@ -510,6 +540,20 @@ export default function App() {
                       <X size={15} />
                     </button>
                   </div>
+                </div>
+              )}
+              {reusedAnswer && (
+                <div className="reused-answer" role="status">
+                  This question is already in your conversation.{' '}
+                  <button
+                    onClick={() =>
+                      document
+                        .getElementById(`answer-${reusedAnswer}`)
+                        ?.scrollIntoView({ behavior: 'smooth', block: 'center' })
+                    }
+                  >
+                    View answer <ArrowUp size={13} />
+                  </button>
                 </div>
               )}
               <form
@@ -721,7 +765,8 @@ export default function App() {
             <p className="source-question">{selectedArticle.question}</p>
             <blockquote className="source-content">{selectedArticle.content}</blockquote>
             <p className="source-footnote">
-              Fictional Northline policy · Updated {selectedArticle.updated}. This source supports
+              Fictional Northline policy · Updated{' '}
+              {new Date(selectedArticle.updated).toLocaleDateString('en-US')}. This source supports
               the answer. Citations show the stored text used for that response.
             </p>
             {isLive && selectedArticle.url && (

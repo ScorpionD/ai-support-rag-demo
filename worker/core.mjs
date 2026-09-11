@@ -88,7 +88,7 @@ export function sourceFromChunk(c) {
     updated: c.updated_at,
   }
 }
-export function retrievalDecision(question, chunks, threshold = 0.68) {
+export function retrievalDecision(question, chunks, threshold = 0.66) {
   if (
     /\b(ignore|override|system prompt|developer message|invent|api key|password)\b/i.test(question)
   )
@@ -99,7 +99,7 @@ export function retrievalDecision(question, chunks, threshold = 0.68) {
     )
   )
     return 'needs-human'
-  if (!chunks.length || chunks[0].similarity < 0.45) return 'not-covered'
+  if (!chunks.length || chunks[0].similarity < 0.5) return 'not-covered'
   if (chunks[0].similarity < threshold) return 'needs-human'
   return 'grounded'
 }
@@ -111,7 +111,7 @@ export function verifyExtraction(raw, chunks) {
     value.status !== 'grounded' ||
     !Array.isArray(value.quotes) ||
     !value.quotes.length ||
-    value.quotes.length > 6
+    value.quotes.length > 20
   )
     throw new Error('Model requested review or returned invalid JSON.')
   const seen = new Set(),
@@ -120,7 +120,7 @@ export function verifyExtraction(raw, chunks) {
   for (const item of value.quotes) {
     const source = chunks.find((c) => c.id === item.chunk_id),
       quote = item.quote
-    if (!source || typeof quote !== 'string' || quote.length < 20 || quote.length > 1400)
+    if (!source || typeof quote !== 'string' || quote.length < 3 || quote.length > 1400)
       throw new Error('Invalid citation.')
     const pos = source.content.indexOf(quote)
     if (
@@ -136,6 +136,42 @@ export function verifyExtraction(raw, chunks) {
     if (!used.some((c) => c.id === source.id)) used.push(source)
   }
   return { text: texts.join('\n\n'), sources: used.map(sourceFromChunk) }
+}
+export function sourceSentences(chunks) {
+  let n = 0
+  return chunks.flatMap((chunk) =>
+    (chunk.content.match(/[\s\S]+?(?:[.!?](?=\s|$)|$)/g) || [])
+      .map((text) => text.trim())
+      .filter(Boolean)
+      .map((text) => ({ id: 'S' + ++n, chunk_id: chunk.id, title: chunk.title, text })),
+  )
+}
+export function verifySelection(raw, chunks) {
+  const value =
+    typeof raw === 'string' ? JSON.parse(raw.replace(/^```(?:json)?\s*|\s*```$/g, '')) : raw
+  const available = sourceSentences(chunks)
+  if (
+    value.status !== 'grounded' ||
+    !Array.isArray(value.sentence_ids) ||
+    !value.sentence_ids.length ||
+    value.sentence_ids.length > 20
+  )
+    throw new Error('Model requested review or returned an invalid selection.')
+  const selected = [...new Set(value.sentence_ids)].map((id) => available.find((s) => s.id === id))
+  if (selected.some((s) => !s)) throw new Error('Unknown source sentence.')
+  // Order by the source, never by a model-invented narrative; group adjacent sentences.
+  const ordered = available.filter((s) => selected.includes(s))
+  const groups = []
+  for (const sentence of ordered) {
+    const last = groups.at(-1)
+    if (
+      last?.chunk_id === sentence.chunk_id &&
+      chunks.find((c) => c.id === last.chunk_id).content.includes(last.quote + ' ' + sentence.text)
+    )
+      last.quote += ' ' + sentence.text
+    else groups.push({ chunk_id: sentence.chunk_id, quote: sentence.text })
+  }
+  return verifyExtraction({ status: 'grounded', quotes: groups }, chunks)
 }
 export function fallbackAnswer(status, chunks, reason = 'retrieval') {
   return {

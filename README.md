@@ -35,12 +35,12 @@ The Worker is accessible through a Pages service binding; workers.dev and previe
 ## Retrieval and answer safety
 
 - Embeddings: `@cf/baai/bge-small-en-v1.5`, 384 dimensions, mean pooling; documents and queries use the same model/pooling. English demo KB.
-- PostgreSQL cosine similarity, top 4 chunks. Initial source threshold: 0.68; weak matches become **Human review needed**, absent matches become **Not covered**. Similarity is a search signal, not a calibrated probability of correctness.
-- The LLM selects complete, verbatim sentences from retrieved chunks. The server rejects unknown chunk IDs, altered quotes, partial sentences and invalid JSON. The interface shows only validated source text. This is deliberately extractive RAG; it does not let the LLM add uncited prose.
+- PostgreSQL cosine similarity, top 4 chunks. Calibrated demo source threshold: 0.66; weak matches become **Human review needed**, absent matches become **Not covered**. Similarity is a search signal, not a calibrated probability of correctness.
+- The LLM selects sentence IDs from retrieved chunks. The server assembles the stored text verbatim; it never trusts model-rewritten quotes. The server rejects unknown chunk IDs, altered quotes, partial sentences and invalid JSON. The interface shows only validated source text. This is deliberately extractive RAG; it does not let the LLM add uncited prose.
 - Context is treated as data, not instructions. Private account actions and prompt override requests cannot receive a confirmed policy answer.
-- OpenRouter requests are limited to `:free` or `openrouter/free`, with provider maximum prices set to zero. Default model: `nex-agi/nex-n2.5-pro:free`; change the environment variable to another free model when needed.
-- A 12-second LLM timeout, unavailable model, daily quota or failed verification yields sources-only fallback and human review. No paid OpenAI API is used.
-- Identical normalized questions within a session and KB revision reuse the stored answer. Database leases and atomic completion prevent duplicate message pairs and duplicate LLM calls for concurrent submissions.
+- OpenRouter requests are limited to `:free` or `openrouter/free`, with provider maximum prices set to zero. Default model: `nex-agi/nex-n2.5-mini:free`; reasoning is disabled for this short extraction task. Change the environment variable to another free model when needed.
+- A 7-second embedding timeout, 12-second LLM timeout, unavailable model, daily quota or failed verification yields sources-only fallback and human review. No paid OpenAI API is used.
+- Identical normalized questions within a session and KB revision reuse the stored answer. Database leases and atomic completion prevent duplicate message pairs and duplicate LLM calls for concurrent submissions. Temporary provider-failure answers can be retried after two minutes; the existing message pair is updated, without adding duplicates.
 
 Exact quotation prevents fabricated policy text but cannot prove relevance or completeness in every case. Review company content and expand evaluation cases before using this for real customers.
 
@@ -74,7 +74,7 @@ Local mock mode remains available without credentials. Live production is explic
 
 ## Database setup
 
-Create a separate Supabase Free project and run `supabase/migrations/001_rag.sql` in its SQL editor. It enables pgvector and creates documents, chunks, sessions, turns/messages, separate handoffs and leads, an outbox and usage counters. All tables have RLS enabled, with no anonymous or authenticated table access. RPCs are restricted to the backend service role.
+Create a separate Supabase Free project and run both SQL files in `supabase/migrations/` in numeric order in its SQL editor. It enables pgvector and creates documents, chunks, sessions, turns/messages, separate handoffs and leads, an outbox and usage counters. All tables have RLS enabled, with no anonymous or authenticated table access. RPCs are restricted to the backend service role.
 
 Anonymous sessions use 256-bit random HttpOnly, Secure, SameSite=Strict cookies. Only a peppered hash is stored in the database. History, contacts and notification payloads expire after seven days; an hourly Worker job cleans them up. There is no cross-device login or account recovery.
 
@@ -117,4 +117,4 @@ References: [BGE model](https://developers.cloudflare.com/workers-ai/models/bge-
 
 ## Verification
 
-`npm test` exercises source matching, low confidence, unknown questions, exact citations, malformed LLM output, input/consent validation, chunking, rate limits, origin protection, local fallback and cancellation. Production checks additionally cover actual vector retrieval, an OpenRouter answer, persistence, repeat-question deduplication, source pages, separate handoff/lead storage and n8n Telegram delivery. Final measured results are recorded in `docs/verification.md`.
+`npm test` exercises source matching, low confidence, unknown questions, exact citations, malformed LLM output, input/consent validation, chunking, rate limits, origin protection, local fallback and cancellation. Production checks additionally cover actual vector retrieval, an OpenRouter answer, persistence, repeat-question deduplication, source pages, separate handoff/lead storage and n8n Telegram delivery. Final measured results are recorded in `docs/verification.md`. The optional `node scripts/verify-database.mjs` check uses private Supabase environment variables to verify real transaction concurrency and fallback recovery; it cleans up its own synthetic session.

@@ -9,6 +9,7 @@ import {
   verifyExtraction,
   normalize,
   fallbackAnswer,
+  verifySelection,
 } from '../worker/core.mjs'
 import worker from '../worker/index.mjs'
 const chunks = [
@@ -24,6 +25,12 @@ const chunks = [
     content: 'Returns are accepted within 30 days of delivery. Items must be unused.',
   },
 ]
+test('sentence selection returns stored text and rejects invented sentence IDs', () => {
+  const result = verifySelection({ status: 'grounded', sentence_ids: ['S1', 'S2'] }, chunks)
+  assert.equal(result.text, chunks[0].content)
+  assert.throws(() => verifySelection({ status: 'grounded', sentence_ids: ['invented'] }, chunks))
+  assert.throws(() => verifySelection({ status: 'needs-human', sentence_ids: [] }, chunks))
+})
 test('covered, low-confidence and uncovered retrieval are distinct', () => {
   assert.equal(retrievalDecision('What is the return policy?', chunks), 'grounded')
   assert.equal(
