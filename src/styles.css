@@ -1726,3 +1726,11 @@ nav > a:hover,
     scroll-behavior: auto !important;
   }
 }
+.response-meta {
+  display: block;
+  font-size: 0.72rem;
+  line-height: 1.6;
+  color: #61746e;
+  margin: 0.5rem 0;
+}
+.draft-result dd { overflow-wrap: anywhere; }

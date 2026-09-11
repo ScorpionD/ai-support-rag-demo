@@ -6,6 +6,8 @@ export interface Article {
   content: string
   keywords: string[]
   updated: string
+  url?: string
+  chunkId?: string
 }
 export type AnswerStatus = 'grounded' | 'needs-human' | 'not-covered'
 export interface SupportAnswer {
@@ -13,7 +15,12 @@ export interface SupportAnswer {
   text: string
   status: AnswerStatus
   sources: Article[]
-  mode: 'mock'
+  mode: 'mock' | 'live'
+  provider?: string
+  processingMs?: number
+  handoffRecommended?: boolean
+  messages?: Message[]
+  cached?: boolean
 }
 export interface Message {
   id: string
@@ -39,9 +46,10 @@ export interface HandoffInput {
 }
 export interface HandoffDraft extends HandoffInput {
   id: string
-  delivery: 'not-sent'
+  delivery: 'not-sent' | 'delivered' | 'pending' | 'review'
 }
 export interface SupportService {
   ask: (request: SupportRequest, options?: RequestOptions) => Promise<SupportAnswer>
-  createHandoff: (input: HandoffInput) => HandoffDraft
+  createHandoff: (input: HandoffInput) => HandoffDraft | Promise<HandoffDraft>
+  initialize?: (reset?: boolean) => Promise<{ messages: Message[]; articles: Article[] }>
 }

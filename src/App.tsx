@@ -23,17 +23,17 @@ import {
   X,
 } from 'lucide-react'
 import { knowledgeBase, sampleQuestions } from './data/knowledgeBase'
-import { supportService } from './services/supportService'
-import type { HandoffDraft, HandoffInput, Message } from './types'
+import { supportService, isLive } from './services/supportService'
+import type { Article, HandoffDraft, HandoffInput, Message } from './types'
 import Modal from './components/Modal'
 
 const workflow = [
   [MessageSquare, 'Customer Question', 'A question, in their words.'],
   [Search, 'Knowledge Search', 'Find relevant company FAQs.'],
   [Layers, 'RAG Context', 'Keep the source in view.'],
-  [Sparkles, 'LLM Answer', 'Mock: use the FAQ text.'],
+  [Sparkles, 'LLM Answer', 'Check the answer against sources.'],
   [BookOpen, 'Source Citation', 'Open and verify the policy.'],
-  [Headphones, 'Human Handoff', 'Draft a request when unsure.'],
+  [Headphones, 'Human Handoff', 'Let a person review the request.'],
 ] as const
 const features = [
   [BookOpen, 'Knowledge-grounded answers', 'Responses use the company’s published demo FAQs.'],
@@ -41,7 +41,7 @@ const features = [
   [ShieldCheck, 'Hallucination protection', 'Unknown questions get an honest “not covered.”'],
   [MessageSquare, 'Conversation history', 'Keep the context in a clear, ongoing conversation.'],
   [Headphones, 'Human handoff', 'Prepare an escalation with the customer’s question.'],
-  [Users, 'Lead capture', 'Collect a validated contact draft for sales enquiries.'],
+  [Users, 'Lead capture', 'Keep sales enquiries separate from support requests.'],
   [Layers, 'Fallback behavior', 'Helpful recovery when a question or service fails.'],
 ] as const
 const emptyHandoff: HandoffInput = {
@@ -55,12 +55,15 @@ const emptyHandoff: HandoffInput = {
 
 export default function App() {
   const [messages, setMessages] = useState<Message[]>([])
+  const [articles, setArticles] = useState<Article[]>(isLive ? [] : knowledgeBase)
+  const [ready, setReady] = useState(!isLive)
+  const [handoffBusy, setHandoffBusy] = useState(false)
   const [input, setInput] = useState('')
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
   const [failedQuestion, setFailedQuestion] = useState('')
   const [failNext, setFailNext] = useState(false)
-  const [source, setSource] = useState<string | null>(null)
+  const [source, setSource] = useState<Article | 'all' | null>(null)
   const [handoffOpen, setHandoffOpen] = useState(false)
   const [handoff, setHandoff] = useState<HandoffInput>(emptyHandoff)
   const [handoffError, setHandoffError] = useState('')
@@ -71,7 +74,7 @@ export default function App() {
   const controller = useRef<AbortController | null>(null)
   const sending = useRef(false)
   const autoScroll = useRef(true)
-  const selectedArticle = knowledgeBase.find((article) => article.id === source)
+  const selectedArticle = source && source !== 'all' ? source : null
   const answers = messages.filter((message) => message.answer)
 
   useEffect(() => {
@@ -80,10 +83,29 @@ export default function App() {
     else if (!busy && answers.length) setNewAnswer(true)
   }, [messages, busy, answers.length])
   useEffect(() => () => controller.current?.abort(), [])
+  useEffect(() => {
+    let mounted = true
+    if (supportService.initialize)
+      supportService
+        .initialize()
+        .then((result) => {
+          if (mounted) {
+            setMessages(result.messages)
+            setArticles(result.articles)
+            setReady(true)
+          }
+        })
+        .catch(() => {
+          if (mounted) setError('Could not restore your chat. Reload the page to reconnect.')
+        })
+    return () => {
+      mounted = false
+    }
+  }, [])
 
   async function ask(question: string, retry = false) {
     const text = question.trim()
-    if (sending.current) return
+    if (sending.current || !ready) return
     if (!text || text.length > 800) {
       setError('Enter a question between 1 and 800 characters.')
       return
@@ -110,10 +132,13 @@ export default function App() {
         { signal: abort.signal, simulateFailure },
       )
       if (!abort.signal.aborted)
-        setMessages((previous) => [
-          ...previous,
-          { id: answer.id, role: 'assistant', text: answer.text, answer },
-        ])
+        setMessages(
+          (previous) =>
+            answer.messages || [
+              ...previous,
+              { id: answer.id, role: 'assistant', text: answer.text, answer },
+            ],
+        )
     } catch (caught) {
       if (!abort.signal.aborted) {
         setError(
@@ -128,7 +153,7 @@ export default function App() {
       }
     }
   }
-  function resetChat() {
+  async function resetChat() {
     controller.current?.abort()
     controller.current = null
     sending.current = false
@@ -141,6 +166,17 @@ export default function App() {
     setFailNext(false)
     setDraft(null)
     setHandoff(emptyHandoff)
+    if (supportService.initialize) {
+      setReady(false)
+      try {
+        const result = await supportService.initialize(true)
+        setMessages(result.messages)
+        setArticles(result.articles)
+        setReady(true)
+      } catch {
+        setError('Could not start a new session. Reload to reconnect.')
+      }
+    }
     inputRef.current?.focus()
   }
   function openHandoff(question?: string, isLead = false) {
@@ -153,13 +189,17 @@ export default function App() {
     setHandoffError('')
     setHandoffOpen(true)
   }
-  function submitHandoff(event: FormEvent) {
+  async function submitHandoff(event: FormEvent) {
     event.preventDefault()
+    if (handoffBusy || !ready) return
+    setHandoffBusy(true)
     try {
-      setDraft(supportService.createHandoff(handoff))
+      setDraft(await supportService.createHandoff(handoff))
       setHandoffError('')
     } catch (caught) {
       setHandoffError(caught instanceof Error ? caught.message : 'Please check the form.')
+    } finally {
+      setHandoffBusy(false)
     }
   }
 
@@ -233,14 +273,23 @@ export default function App() {
               <h2 id="demo-heading">Meet your first line of support.</h2>
             </div>
             <span className="mode-pill">
-              <span className="small-dot" /> Mock RAG mode
+              <span className="small-dot" />{' '}
+              {isLive ? 'Live RAG · source-verified' : 'Mock RAG mode'}
             </span>
           </div>
           <div className="demo-disclosure">
             <CircleHelp size={17} />
             <p>
-              Try Northline, a fictional home & office store. Replies come from 10 built-in FAQs.{' '}
-              <strong>No live AI, no messages sent.</strong> Use test details only.
+              Try Northline, a fictional home & office store. Answers are checked against company
+              sources.{' '}
+              {isLive ? (
+                <>
+                  <strong>Live search + OpenRouter AI.</strong> Use fictional details only.
+                  Questions go to Cloudflare and OpenRouter; chat is stored for up to 7 days.
+                </>
+              ) : (
+                <strong>Local mock · no messages sent.</strong>
+              )}
             </p>
           </div>
 
@@ -257,11 +306,11 @@ export default function App() {
               </div>
               <div className="sidebar-label">
                 <span>COMPANY KNOWLEDGE</span>
-                <span>10</span>
+                <span>{articles.length}</span>
               </div>
               <div className="article-list">
-                {knowledgeBase.map((article) => (
-                  <button key={article.id} onClick={() => setSource(article.id)}>
+                {articles.map((article) => (
+                  <button key={article.id} onClick={() => setSource(article)}>
                     <FileText size={16} />
                     <span>{article.title}</span>
                     <ChevronRight size={14} />
@@ -302,7 +351,8 @@ export default function App() {
               </header>
               <div className="mobile-knowledge">
                 <button onClick={() => setSource('all')}>
-                  <BookOpen size={15} /> Browse 10 source articles <ChevronRight size={14} />
+                  <BookOpen size={15} /> Browse {articles.length} source articles{' '}
+                  <ChevronRight size={14} />
                 </button>
               </div>
               <div
@@ -333,7 +383,7 @@ export default function App() {
                     behind my answer. If it isn’t covered, we can prepare a human handoff.
                   </p>
                   <div className="welcome-proof">
-                    <BookOpen size={14} /> 10 articles <span>·</span>
+                    <BookOpen size={14} /> {articles.length} articles <span>·</span>
                     <ShieldCheck size={14} /> Source-linked answers
                   </div>
                 </div>
@@ -341,7 +391,11 @@ export default function App() {
                   <div className="starter-questions">
                     <span>NOT SURE WHERE TO START?</span>
                     {sampleQuestions.map((question) => (
-                      <button key={question} onClick={() => void ask(question)} disabled={busy}>
+                      <button
+                        key={question}
+                        onClick={() => void ask(question)}
+                        disabled={busy || !ready}
+                      >
                         {question}
                         <ArrowUp size={16} className="diagonal" />
                       </button>
@@ -378,10 +432,20 @@ export default function App() {
                               ? 'Human review needed'
                               : 'Not covered in knowledge base'}
                         </span>
+                        {isLive && (
+                          <span className="response-meta">
+                            {message.answer.provider === 'openrouter'
+                              ? 'OpenRouter · verified quotes'
+                              : 'Sources-only fallback'}
+                            {message.answer.processingMs
+                              ? ` · ${(message.answer.processingMs / 1000).toFixed(1)}s`
+                              : ''}
+                          </span>
+                        )}
                         <div className="citations">
                           {message.answer.sources.length ? (
                             message.answer.sources.map((article) => (
-                              <button key={article.id} onClick={() => setSource(article.id)}>
+                              <button key={article.id} onClick={() => setSource(article)}>
                                 <BookOpen size={14} />
                                 <span>
                                   {article.id} · {article.title}
@@ -403,14 +467,14 @@ export default function App() {
                     )}
                   </article>
                 ))}
-                {busy && (
+                {(busy || !ready) && (
                   <div className="thinking" role="status">
                     <span className="thinking-dots">
                       <i />
                       <i />
                       <i />
                     </span>
-                    <span>Checking Northline’s knowledge base…</span>
+                    <span>Searching sources and verifying the answer…</span>
                   </div>
                 )}
               </div>
@@ -434,7 +498,10 @@ export default function App() {
                   </div>
                   <div className="error-actions">
                     {failedQuestion && (
-                      <button onClick={() => void ask(failedQuestion, true)} disabled={busy}>
+                      <button
+                        onClick={() => void ask(failedQuestion, true)}
+                        disabled={busy || !ready}
+                      >
                         Try again
                       </button>
                     )}
@@ -464,7 +531,7 @@ export default function App() {
                     value={input}
                     onChange={(event) => setInput(event.target.value)}
                     placeholder="Ask about returns, delivery, or our policies…"
-                    disabled={busy}
+                    disabled={busy || !ready}
                     onKeyDown={(event) => {
                       if (
                         event.key === 'Enter' &&
@@ -479,7 +546,7 @@ export default function App() {
                   <button
                     className="send-button"
                     type="submit"
-                    disabled={busy || !input.trim()}
+                    disabled={busy || !ready || !input.trim()}
                     aria-label={busy ? 'Processing question' : 'Send message'}
                   >
                     {busy ? <LoaderCircle size={20} className="spin" /> : <ArrowUp size={22} />}
@@ -487,7 +554,10 @@ export default function App() {
                 </div>
                 <div className="composer-footer">
                   <span>
-                    <LockKeyhole size={12} /> In this tab only · clears on reload
+                    <LockKeyhole size={12} />{' '}
+                    {isLive
+                      ? 'Saved securely · restored on reload · 7 days'
+                      : 'Local mock · clears on reload'}
                   </span>
                   <span>{input.length}/800</span>
                 </div>
@@ -501,18 +571,20 @@ export default function App() {
             <details className="demo-controls">
               <summary>Demo controls</summary>
               <div>
-                <label>
-                  <input
-                    type="checkbox"
-                    checked={failNext}
-                    disabled={busy}
-                    onChange={(event) => setFailNext(event.target.checked)}
-                  />{' '}
-                  Simulate an error on the next question
-                </label>
+                {!isLive && (
+                  <label>
+                    <input
+                      type="checkbox"
+                      checked={failNext}
+                      disabled={busy || !ready}
+                      onChange={(event) => setFailNext(event.target.checked)}
+                    />{' '}
+                    Simulate an error on the next question
+                  </label>
+                )}
                 <button
                   onClick={() => void ask('Can you recommend a hotel for my holiday?')}
-                  disabled={busy}
+                  disabled={busy || !ready}
                 >
                   Try an unknown question <ArrowRight size={13} />
                 </button>
@@ -523,7 +595,11 @@ export default function App() {
                 >
                   Try lead capture <ArrowRight size={13} />
                 </button>
-                <p>Local demonstrations. No request reaches a real team.</p>
+                <p>
+                  {isLive
+                    ? 'Test requests are stored and notify the demo manager.'
+                    : 'Local preview only.'}
+                </p>
               </div>
             </details>
           </div>
@@ -551,8 +627,10 @@ export default function App() {
             ))}
           </div>
           <p className="workflow-note">
-            <span>STAGE 1</span> The search and answer steps are simulated locally with curated FAQ
-            text. A live retrieval service, LLM and team delivery are planned for the next stage.
+            <span>{isLive ? 'LIVE RAG' : 'LOCAL MOCK'}</span>{' '}
+            {isLive
+              ? 'Cloudflare embeddings → pgvector search → OpenRouter free model → verified source quotes. If confidence is low or a provider is unavailable, sources and human review take over.'
+              : 'Local FAQ matching for development. No external requests.'}
           </p>
         </section>
 
@@ -563,9 +641,8 @@ export default function App() {
               <h2>Production-ready features</h2>
             </div>
             <p>
-              Core patterns demonstrated here.
-              <br />
-              Live integrations come next.
+              Grounded answers. Clear escalation.
+              <br />A working demo on free service quotas.
             </p>
           </div>
           <div className="features-grid">
@@ -624,7 +701,7 @@ export default function App() {
             <small>A portfolio demo by ScorpionD</small>
           </span>
         </div>
-        <span>React · TypeScript · Mock RAG</span>
+        <span>React · TypeScript · {isLive ? 'pgvector · OpenRouter' : 'Mock RAG'}</span>
         <a href="https://github.com/ScorpionD/ai-support-rag-demo" target="_blank" rel="noreferrer">
           View source <ArrowUp size={14} className="diagonal" />
         </a>
@@ -644,11 +721,16 @@ export default function App() {
             <p className="source-question">{selectedArticle.question}</p>
             <blockquote className="source-content">{selectedArticle.content}</blockquote>
             <p className="source-footnote">
-              Fictional Northline policy · Updated {selectedArticle.updated}. This is the exact
-              source text used by the mock service.
+              Fictional Northline policy · Updated {selectedArticle.updated}. This source supports
+              the answer. Citations show the stored text used for that response.
             </p>
+            {isLive && selectedArticle.url && (
+              <a className="text-link" href={selectedArticle.url} target="_blank" rel="noreferrer">
+                Open full source <ArrowUp size={14} />
+              </a>
+            )}
             <button className="secondary-button" onClick={() => setSource('all')}>
-              <BookOpen size={16} /> Browse all 10 articles
+              <BookOpen size={16} /> Browse all {articles.length} articles
             </button>
           </>
         ) : (
@@ -658,8 +740,8 @@ export default function App() {
               company.
             </p>
             <div className="kb-directory">
-              {knowledgeBase.map((article) => (
-                <button key={article.id} onClick={() => setSource(article.id)}>
+              {articles.map((article) => (
+                <button key={article.id} onClick={() => setSource(article)}>
                   <span>{article.id}</span>
                   <strong>{article.title}</strong>
                   <ChevronRight size={17} />
@@ -671,7 +753,13 @@ export default function App() {
       </Modal>
       <Modal
         open={handoffOpen}
-        title={draft ? 'Your demo draft is ready' : 'Let a human take it from here'}
+        title={
+          draft
+            ? isLive
+              ? 'Your request is saved'
+              : 'Your demo draft is ready'
+            : 'Let a human take it from here'
+        }
         onClose={() => setHandoffOpen(false)}
       >
         {draft ? (
@@ -679,10 +767,23 @@ export default function App() {
             <span className="draft-check">
               <Check size={27} />
             </span>
-            <h3>{draft.isLead ? 'Sales lead draft created' : 'Support handoff draft created'}</h3>
+            <h3>{draft.isLead ? 'Sales lead saved' : 'Support handoff saved'}</h3>
             <p>
-              Saved in this tab’s memory. <strong>Nothing has been sent.</strong> Real delivery and
-              persistent storage will be connected in stage 2.
+              {isLive ? (
+                <>
+                  Saved in the demo’s private Supabase database.{' '}
+                  <strong>
+                    {draft.delivery === 'delivered'
+                      ? 'Telegram delivered to the demo manager.'
+                      : draft.delivery === 'review'
+                        ? 'Notification needs review; your request is safely stored.'
+                        : 'Manager notification is queued. Your request is safely stored.'}
+                  </strong>{' '}
+                  This fictional store does not provide real customer service.
+                </>
+              ) : (
+                'Local preview only. Nothing has been sent.'
+              )}
             </p>
             <dl>
               <dt>Reference</dt>
@@ -700,7 +801,15 @@ export default function App() {
               <dt>Request</dt>
               <dd>{draft.message}</dd>
               <dt>Status</dt>
-              <dd>Local preview · not delivered</dd>
+              <dd>
+                {draft.delivery === 'delivered'
+                  ? 'Saved in Supabase · Telegram delivered'
+                  : draft.delivery === 'review'
+                    ? 'Saved · notification needs review'
+                    : draft.delivery === 'pending'
+                      ? 'Saved · notification pending'
+                      : 'Local preview · not delivered'}
+              </dd>
             </dl>
             <button className="primary-button" onClick={() => setHandoffOpen(false)}>
               Back to the conversation <ArrowRight size={16} />
@@ -709,8 +818,9 @@ export default function App() {
         ) : (
           <form className="handoff-form" onSubmit={submitHandoff}>
             <p className="modal-description">
-              Prepare a support request or sales lead with fictional details. This is a local
-              preview; it does not contact a real person.
+              {isLive
+                ? 'Use fictional contact details. Your request is stored in Supabase for up to 7 days and sent to the demo manager in Telegram. Sales leads are stored separately.'
+                : 'Prepare a local draft with fictional details. Nothing will be sent.'}
             </p>
             <div className="form-row">
               <label>
@@ -774,16 +884,26 @@ export default function App() {
                 checked={handoff.consent}
                 onChange={(e) => setHandoff({ ...handoff, consent: e.target.checked })}
               />{' '}
-              I am using fictional test details. I understand this draft stays in this tab and is
-              not sent.
+              {isLive
+                ? 'I am using fictional test details and agree to store this request and notify the demo manager.'
+                : 'I understand this fictional draft stays in this tab.'}
             </label>
             {handoffError && (
               <p className="form-error" role="alert">
                 {handoffError}
               </p>
             )}
-            <button className="primary-button" type="submit">
-              Create demo {handoff.isLead ? 'lead' : 'handoff'} <ArrowRight size={17} />
+            <button className="primary-button" type="submit" disabled={handoffBusy || !ready}>
+              {handoffBusy ? (
+                <>
+                  <LoaderCircle size={16} className="spin" /> Saving…
+                </>
+              ) : isLive ? (
+                'Send demo'
+              ) : (
+                'Create demo'
+              )}{' '}
+              {handoff.isLead ? 'lead' : 'handoff'} <ArrowRight size={17} />
             </button>
           </form>
         )}

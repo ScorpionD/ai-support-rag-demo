@@ -1,106 +1,120 @@
 # AI Customer Support Agent
 
-[**Open the live demo**](https://ai-support-rag-demo.pages.dev/) · [GitHub repository](https://github.com/ScorpionD/ai-support-rag-demo)
+A live, knowledge-grounded support portfolio demo for fictional store **Northline**.
 
-A standalone portfolio demo of a customer support assistant that answers from a fictional company's knowledge base, cites its sources, and offers a human handoff when a question needs review.
+- Live: https://ai-support-rag-demo.pages.dev/
+- Repository: https://github.com/ScorpionD/ai-support-rag-demo
+- React + TypeScript + Vite, Cloudflare Pages / private Worker, Supabase PostgreSQL + pgvector, OpenRouter free LLM and an independent n8n Telegram workflow.
 
-**Stage 1: frontend MVP, mock RAG only.** No live LLM, embeddings, backend, database, automation or external messaging is connected. No API keys, paid services or real customer data are needed.
+## What works
 
-## Experience
+Questions are embedded, searched against company documents and answered with verified source quotes. Unknown questions and uncertain matches offer human review. A free-model outage returns related sources without claiming an AI answer. Sources open in the interface or as standalone source pages. Chat history is restored from the backend using an anonymous secure session cookie. Support handoffs and sales leads are stored in separate tables and notify the demo manager through n8n.
 
-- Responsive React + TypeScript chat interface with conversation history, sample questions, loading indicator, validation, error recovery and a new-chat action.
-- Ten editable Northline FAQs covering returns, support hours, delivery, cancellation, warranty, damaged items, tracking, delivery locations, payments and bulk orders.
-- Every matched response quotes the bundled FAQ content verbatim. Citation buttons open the corresponding full article with its ID and fictional update date.
-- Honest statuses: **Source matched**, **Human review needed**, or **Not covered in knowledge base**. These are routing statuses, not calibrated AI confidence scores.
-- Unsupported questions abstain; sensitive order actions and unsupported policy details offer a human handoff.
-- A validated support/lead capture form creates an explicitly **unsent local draft**. It does not email, message, create a CRM record or contact a real person.
-- Demo controls for a recoverable service error, an unknown question and a sales lead draft.
-- Keyboard-accessible source and handoff dialogs, screen-reader loading/error announcements and reduced-motion styling.
+The public demo uses fictional details only. It is a working demonstration of production patterns, not a staffed support service or a production SLA.
 
-All company names, policies and examples are fictional. Conversation and handoff data live only in React memory in the current tab. Reloading or starting a new chat clears them. There is no localStorage, analytics, external font request or chat network request in mock mode.
+## Architecture
+
+```mermaid
+flowchart LR
+  A[React chat / Cloudflare Pages] --> B[Same-origin Pages API]
+  B --> C[Private Cloudflare Worker]
+  C --> D[Workers AI / BGE Small embeddings]
+  C --> E[Supabase / pgvector search]
+  E --> C
+  C --> F[OpenRouter free model]
+  F --> G[Verify exact source sentences]
+  G --> A
+  C --> H[Separate support handoffs and leads]
+  H --> I[Notification outbox]
+  I --> J[Private n8n webhook]
+  J --> K[Manager Telegram]
+```
+
+The Worker is accessible through a Pages service binding; workers.dev and preview URLs are disabled. No database key, AI key, bot token or ingestion token is shipped to the browser. The existing lead automation project and cryptoanalyze.pro are not dependencies of the application. The RAG notification workflow shares the existing n8n runtime and private network connection without modifying the original workflow.
+
+## Retrieval and answer safety
+
+- Embeddings: `@cf/baai/bge-small-en-v1.5`, 384 dimensions, mean pooling; documents and queries use the same model/pooling. English demo KB.
+- PostgreSQL cosine similarity, top 4 chunks. Initial source threshold: 0.68; weak matches become **Human review needed**, absent matches become **Not covered**. Similarity is a search signal, not a calibrated probability of correctness.
+- The LLM selects complete, verbatim sentences from retrieved chunks. The server rejects unknown chunk IDs, altered quotes, partial sentences and invalid JSON. The interface shows only validated source text. This is deliberately extractive RAG; it does not let the LLM add uncited prose.
+- Context is treated as data, not instructions. Private account actions and prompt override requests cannot receive a confirmed policy answer.
+- OpenRouter requests are limited to `:free` or `openrouter/free`, with provider maximum prices set to zero. Default model: `nex-agi/nex-n2.5-pro:free`; change the environment variable to another free model when needed.
+- A 12-second LLM timeout, unavailable model, daily quota or failed verification yields sources-only fallback and human review. No paid OpenAI API is used.
+- Identical normalized questions within a session and KB revision reuse the stored answer. Database leases and atomic completion prevent duplicate message pairs and duplicate LLM calls for concurrent submissions.
+
+Exact quotation prevents fabricated policy text but cannot prove relevance or completeness in every case. Review company content and expand evaluation cases before using this for real customers.
+
+## Ingestion: FAQ and Markdown
+
+The `knowledge/northline-faq.json` seed contains 10 curated fictional articles. Each document has `id`, `title`, `content`, optional `question`, `category` and HTTPS `url`. Without a URL, the source opens at `/api/sources/<id>`.
+
+```sh
+# Set RAG_ADMIN_TOKEN privately in your shell first; never paste it into Git.
+npm run ingest -- knowledge/northline-faq.json
+npm run ingest -- knowledge/your-policy.md
+```
+
+Markdown uses its filename as ID and its first H1 as title. The authenticated ingestion endpoint chunks text (up to 1,000 characters with 140-character overlap), generates embeddings and replaces that document's chunks atomically. Content revisions invalidate question caches; re-ingesting unchanged content does no extra embedding work. Documents are limited to 40,000 characters. Source URLs are references, never fetched by the backend.
+
+PDF is deliberately not included: convert it to reviewed Markdown, then ingest it. This avoids unreliable PDF extraction and extra infrastructure in this stage.
 
 ## Local development
 
-Requires Node.js **22.12+** and npm.
+Node.js 22.12 or newer:
 
 ```sh
 npm ci
+# Copy .env.example to .env and keep VITE_SUPPORT_MODE=mock locally.
 npm run dev
-```
-
-Open the local address printed by Vite. An environment file is optional: the default is `VITE_SUPPORT_MODE=mock`. If desired, copy `.env.example` to `.env`.
-
-```sh
 npm test
 npm run build
-npm run preview
 ```
 
-The production build is written to `dist`. The test suite covers sample answers, citations, unknown questions, policy override attempts, human routing, follow-ups, validation, retries and cancellation.
+Local mock mode remains available without credentials. Live production is explicitly configured with `VITE_SUPPORT_MODE=live`. A disconnected live backend returns an error; it never silently pretends that a local answer was stored or delivered.
 
-## Mock retrieval and its limits
+## Database setup
 
-`src/services/mockSupport.ts` performs deterministic keyword matching against `src/data/knowledgeBase.ts`. It returns unchanged FAQ excerpts with references. It does **not** perform semantic/vector retrieval or LLM generation, and does not infer personalized exceptions. “Tell me more” can repeat the previous cited policy.
+Create a separate Supabase Free project and run `supabase/migrations/001_rag.sql` in its SQL editor. It enables pgvector and creates documents, chunks, sessions, turns/messages, separate handoffs and leads, an outbox and usage counters. All tables have RLS enabled, with no anonymous or authenticated table access. RPCs are restricted to the backend service role.
 
-Keyword matching is deliberately limited. Broad, mixed-topic or unusual phrasings can select a related FAQ without fully answering the question. **Source matched means a policy was found, not a guarantee that every part of a question was resolved.** Human handoff remains available on every answer. The “Production-ready features” section describes patterns demonstrated by this frontend, not a claim that a production support service is connected. Live RAG will need retrieval evaluation, prompt-injection controls, source coverage checks and operational safeguards.
+Anonymous sessions use 256-bit random HttpOnly, Secure, SameSite=Strict cookies. Only a peppered hash is stored in the database. History, contacts and notification payloads expire after seven days; an hourly Worker job cleans them up. There is no cross-device login or account recovery.
 
-## Service boundary
+## Cloudflare deployment
 
-```text
-src/
-  components/Modal.tsx       Accessible native dialogs
-  data/knowledgeBase.ts      Ten fictional FAQ records
-  services/mockSupport.ts    Matching, abstention and local handoff
-  services/supportService.ts Single provider selection boundary
-  types.ts                  Request, response and service contracts
-  App.tsx                   Chat, evidence, handoff and page sections
-  styles.css                Responsive interface
-```
+Pages Git integration:
 
-UI → `SupportService.ask({ question, history }, { signal })` → structured answer with text, status, sources and mode.
+- Production branch: `main`
+- Build command: `npm run build`
+- Output: `dist`
+- Production environment: `VITE_SUPPORT_MODE=live`
+- Production service binding: `RAG_API` -> `ai-support-rag-api`
+- Fail open: false for production and preview
 
-`SupportService.createHandoff()` currently creates a local draft. Stage 2 can extend this contract to an asynchronous server delivery operation with an explicit delivery result. Do not label a draft as delivered.
+Deploy the separate Worker using `npm run deploy:backend`. Its configuration is in `worker/wrangler.jsonc`; adapt the private VPC binding for a different account. Set these as encrypted Worker secrets: `SUPABASE_URL`, `SUPABASE_SECRET_KEY`, `OPENROUTER_API_KEY`, `SESSION_PEPPER`, `RAG_ADMIN_TOKEN`, `RAG_NOTIFICATION_SECRET`. The only `VITE_*` value is the public mode switch. Worker changes require an explicit deployment; Pages Git builds deploy the frontend and API proxy.
 
-Unsupported `VITE_SUPPORT_MODE` values fail visibly; they never silently pretend to use a live provider. In stage 2, add a backend adapter here and keep the UI independent of provider details. Validate server responses before rendering, constrain citations to trusted source URLs/IDs, and keep all provider/database credentials on the server.
+After deployment, ingest the FAQ seed. Production origin checks intentionally reject browser writes from other sites and preview deployments.
 
-## Cloudflare Pages deployment
+## n8n and delivery reliability
 
-Create a **Pages** project using **Import an existing Git repository**. Connect `ScorpionD/ai-support-rag-demo` and use:
+`n8n/workflow.mjs` builds the separate notification workflow. Supply the new RAG database credential, a header-auth credential, Telegram bot credential and manager chat ID privately at setup time. Do not commit n8n credential exports.
 
-| Setting                  | Value                                |
-| ------------------------ | ------------------------------------ |
-| Production branch        | `main`                               |
-| Build command            | `npm run build`                      |
-| Build output directory   | `dist`                               |
-| Root directory           | Repository root / leave empty        |
-| Node version             | `22.12.0` or later supported release |
-| Optional public variable | `VITE_SUPPORT_MODE=mock`             |
+The backend saves a request and outbox row in one transaction before calling n8n through the private VPC service. The workflow atomically claims the row, sends Telegram and records the Telegram message ID. The UI reports delivered only when that database status confirms delivery. Duplicate form submissions reuse the same request and do not resend successful notifications.
 
-Save and deploy. Pages provides a public `*.pages.dev` address and builds future pushes to `main`. The `public/_headers` file adds static response headers, including a restrictive Content Security Policy. No custom domain, DNS changes, Workers binding, Function or paid product is required.
+Safe database operations retry once. Pending outbox entries are retried by the hourly Worker job after an unavailable n8n trigger. A Telegram send with an ambiguous result is marked for review, not blindly retried; this avoids duplicate manager alerts. A stuck sending state becomes review after ten minutes on the next hourly cleanup. There is no claim of exactly-once delivery across Telegram and PostgreSQL. Review notifications that need attention in Supabase.
 
-[Official Cloudflare Vite deployment guide](https://developers.cloudflare.com/pages/framework-guides/deploy-a-vite3-project/)
+## Abuse protection and free-tier limits
 
-### Manual smoke checks
+- Edge rate limit: 30 API requests/minute/IP.
+- Questions: 800 characters, 8/minute/session, 20 distinct questions/session.
+- New sessions: 10/hour/IP and 500/day globally.
+- Contacts: explicit consent, 4/hour/IP and 25/day globally; messages up to 1,000 characters.
+- JSON request size caps, origin validation, private service binding, restrictive frontend CSP.
+- RAG LLM budget: 20 requests/day; query embedding budget: 200/day. Limits stop calls; they do not upgrade plans. OpenRouter's account-wide quota is also shared with other projects.
+- Logs contain operation/status/latency IDs, not chat text, email, tokens or contact details. n8n does not persist execution payloads.
 
-1. Try all four sample questions and open each citation. Compare the answer with the source.
-2. Ask an unknown question, then open **Talk to a human**. Check form validation and the **not delivered** draft status.
-3. Use **Demo controls → Simulate an error**, submit a question, and retry. Ensure the user message is not duplicated.
-4. Start a new chat while an answer is loading. No old answer should appear afterwards.
-5. Test 320px, 390px, tablet and desktop widths. Check the composer, scrolling history, citation dialog and handoff form with a keyboard.
+Cloudflare Workers AI includes a daily free allocation; this small demo's BGE embeddings fit within that allocation. Supabase Free and OpenRouter free models have availability and quota limits. The application uses honest fallback when a dependency is unavailable. No paid service was requested or configured.
 
-## Security and scope
+References: [BGE model](https://developers.cloudflare.com/workers-ai/models/bge-small-en-v1.5/), [Workers AI quotas](https://developers.cloudflare.com/workers-ai/platform/pricing/), [OpenRouter free router](https://openrouter.ai/docs/guides/routing/routers/free-router), [Supabase vector columns](https://supabase.com/docs/guides/ai/vector-columns).
 
-- Never put keys in `VITE_*` variables: they are public build-time values.
-- `.env`, `.env.*` (except `.env.example`), `node_modules`, build output and local artifacts are ignored by Git.
-- React renders user text as text; no HTML or generated Markdown is injected.
-- Mock delay is 700ms for visible feedback. It is not a claim about future LLM latency.
-- Frontend input limits and policy matching are UX behavior, not a server security boundary.
-- This is an independent project. It has no dependency on `ai-lead-automation-demo` or `cryptoanalyze.pro`.
+## Verification
 
-## Stage 2 — planned, not implemented
-
-Supabase + pgvector; real RAG retrieval; OpenRouter free LLM; document/FAQ ingestion; backend-validated citations; n8n orchestration; Telegram human handoff; persistent lead/conversation storage. Live deployment will also require rate limiting, abuse protection, server-side validation, observability, privacy/retention decisions and retrieval-quality evaluation. Connect these only in a separately authorized stage.
-
-## License
-
-MIT. Built by ScorpionD as a portfolio demonstration.
+`npm test` exercises source matching, low confidence, unknown questions, exact citations, malformed LLM output, input/consent validation, chunking, rate limits, origin protection, local fallback and cancellation. Production checks additionally cover actual vector retrieval, an OpenRouter answer, persistence, repeat-question deduplication, source pages, separate handoff/lead storage and n8n Telegram delivery. Final measured results are recorded in `docs/verification.md`.
