@@ -1,5 +1,7 @@
 # AI Customer Support Agent
 
+[**Open the live demo**](https://ai-support-rag-demo.pages.dev/) · [GitHub repository](https://github.com/ScorpionD/ai-support-rag-demo)
+
 A standalone portfolio demo of a customer support assistant that answers from a fictional company's knowledge base, cites its sources, and offers a human handoff when a question needs review.
 
 **Stage 1: frontend MVP, mock RAG only.** No live LLM, embeddings, backend, database, automation or external messaging is connected. No API keys, paid services or real customer data are needed.
